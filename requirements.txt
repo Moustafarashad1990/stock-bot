@@ -4,3 +4,4 @@ pandas
 numpy
 torch
 textblob
+finnhub-python
