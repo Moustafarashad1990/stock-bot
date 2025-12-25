@@ -1,2 +1,6 @@
-Requirement already satisfied: pip in ./.venv/lib/python3.11/site-packages (25.3)
-Requirement already satisfied: setuptools in ./.venv/lib/python3.11/site-packages (80.9.0)
+discord.py
+yfinance
+pandas
+numpy
+torch
+textblob
