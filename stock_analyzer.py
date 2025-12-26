@@ -26,7 +26,7 @@ tickers = [
 ]
 
 import os
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+DISCORD_TOKEN = str(os.getenv("DISCORD_TOKEN"))
 CHANNEL_ID = 1452952904980758571
 FINNHUB_API_KEY = "d56imfhr01qu3qoaukjgd56imfhr01qu3qoaukk0"
 DATA_PERIOD = "1y"
