@@ -1,7 +1,7 @@
-discord.py
+discord.py==2.3.2  # Or latest version
 yfinance
-pandas
-numpy
+polygon
 torch
 textblob
-finnhub-python
+pandas
+numpy
