@@ -1,6 +1,6 @@
-discord.py==2.3.2 
+discord.py @ git+https://github.com/Rapptz/discord.py@master
 yfinance
-polygon
+polygon-api-client
 torch
 textblob
 pandas
