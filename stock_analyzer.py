@@ -8,7 +8,7 @@ import traceback
 import concurrent.futures
 import torch
 import torch.nn as nn
-from polygon import RESTClient  # Use Polygon for data (paid plan)
+from polygon import RESTClient
 import yfinance as yf  # News fallback
 import os
 from textblob import TextBlob
@@ -171,21 +171,21 @@ def fetch_polygon_data(client: RESTClient, ticker: str) -> pd.DataFrame | None:
 # ===================== NEWS FUNCTION =====================
 def get_stock_news(ticker: str) -> str:
     try:
-        client = RESTClient(POLYGON_API_KEY)
-        news_list = list(client.list_ticker_news(ticker, limit=5))
-        if not news_list:
-            return "No recent news found."
+        stock = yf.Ticker(ticker)
+        news = stock.news[:5]
+        if not news:
+            return "No recent news."
         msgs = []
-        for news in news_list:
-            title = news.title
-            publisher = news.publisher.name if news.publisher else "Unknown"
-            link = news.article_url
+        for item in news:
+            title = item.get('title', 'No title')
+            publisher = item.get('publisher', 'Unknown')
+            link = item.get('link', '')
             sentiment = TextBlob(title).sentiment.polarity
             sent_str = "Positive" if sentiment > 0 else "Negative" if sentiment < 0 else "Neutral"
             msgs.append(f"{title} ({publisher}, {sent_str})\n{link}")
         return "\n\n".join(msgs)
     except Exception as e:
-        print(f"Polygon news error: {e}")
+        print(f"News fetch error: {e}")
         return "Failed to fetch news."
 
 # ===================== TICKER PROCESSING =====================
@@ -260,7 +260,7 @@ async def generate_recommendations(ctx, is_buy: bool):
         all_signals = []
         for f in concurrent.futures.as_completed(futures):
             all_signals.extend(f.result())
-    client.close()
+    # client.close()  # Removed — not needed
     recommendations = []
     if is_buy:
         for sig in all_signals:
@@ -291,7 +291,7 @@ async def daily_analysis():
         all_signals = []
         for f in concurrent.futures.as_completed(futures):
             all_signals.extend(f.result())
-    client.close()
+    # client.close()  # Removed — not needed
     if all_signals:
         priority = [s for s in all_signals if "LSTM" in s or "Cross" in s]
         others = [s for s in all_signals if s not in priority]
