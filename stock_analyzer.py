@@ -8,7 +8,7 @@ import traceback
 import concurrent.futures
 import torch
 import torch.nn as nn
-from polygon import RESTClient
+from polygon import RESTClient  # Use Polygon for data (paid plan)
 import yfinance as yf  # News fallback
 import os
 from textblob import TextBlob
@@ -56,7 +56,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "1452952904980758571"))
 DATA_PERIOD_DAYS = 400
-MAX_WORKERS = 30  # For paid Polygon
+MAX_WORKERS = 30 # For paid Polygon
 
 if not POLYGON_API_KEY:
     raise ValueError("POLYGON_API_KEY required!")
