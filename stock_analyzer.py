@@ -171,21 +171,21 @@ def fetch_polygon_data(client: RESTClient, ticker: str) -> pd.DataFrame | None:
 # ===================== NEWS FUNCTION =====================
 def get_stock_news(ticker: str) -> str:
     try:
-        stock = yf.Ticker(ticker)
-        news = stock.news[:5]
-        if not news:
-            return "No recent news."
+        client = RESTClient(POLYGON_API_KEY)
+        news_list = list(client.list_ticker_news(ticker, limit=5))
+        if not news_list:
+            return "No recent news found."
         msgs = []
-        for item in news:
-            title = item.get('title', 'No title')
-            publisher = item.get('publisher', 'Unknown')
-            link = item.get('link', '')
+        for news in news_list:
+            title = news.title
+            publisher = news.publisher.name if news.publisher else "Unknown"
+            link = news.article_url
             sentiment = TextBlob(title).sentiment.polarity
             sent_str = "Positive" if sentiment > 0 else "Negative" if sentiment < 0 else "Neutral"
             msgs.append(f"{title} ({publisher}, {sent_str})\n{link}")
         return "\n\n".join(msgs)
     except Exception as e:
-        print(f"News fetch error: {e}")
+        print(f"Polygon news error: {e}")
         return "Failed to fetch news."
 
 # ===================== TICKER PROCESSING =====================
