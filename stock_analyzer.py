@@ -1,4 +1,4 @@
-impkkimport discord
+import discord
 from discord.ext import commands
 import asyncio
 import pandas as pd
