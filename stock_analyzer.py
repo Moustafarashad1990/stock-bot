@@ -109,6 +109,7 @@ def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
         # Removed client.close() - not needed and causes errors
         
         if not aggs:
+            print(f"No data for {ticker}")
             return None
             
         df = pd.DataFrame(aggs)
@@ -127,7 +128,7 @@ def get_stock_news(ticker: str) -> str:
         stock = yf.Ticker(ticker)
         news = stock.news[:5]
         if not news:
-            return "No recent news."
+            return "No recent news found."
         msgs = []
         for item in news:
             title = item.get('title', 'No title')
@@ -138,7 +139,8 @@ def get_stock_news(ticker: str) -> str:
             msgs.append(f"• {title} ({publisher} | {sent_str})\n{link}")
         return "\n".join(msgs)
     except Exception as e:
-        return "Failed to fetch news."
+        print(f"News fetch error for {ticker}: {e}")
+        return "Failed to fetch news - try later."
 
 # ===================== SIGNAL PROCESSING =====================
 def process_ticker(ticker: str) -> list[str]:
@@ -150,12 +152,12 @@ def process_ticker(ticker: str) -> list[str]:
     volume = df['Volume']
     signals = []
 
-    # RSI - Strong levels only
+    # RSI - Slightly loosened for more signals
     rsi = calculate_rsi(close).iloc[-1]
-    if rsi > 75:
-        signals.append(f"Strongly Overbought (RSI {rsi:.1f})")
-    elif rsi < 25:
-        signals.append(f"Strongly Oversold (RSI {rsi:.1f})")
+    if rsi > 70:
+        signals.append(f"Overbought (RSI {rsi:.1f})")
+    elif rsi < 30:
+        signals.append(f"Oversold (RSI {rsi:.1f})")
 
     # MACD Crossover
     macd_line, signal_line = calculate_macd(close)
@@ -174,7 +176,7 @@ def process_ticker(ticker: str) -> list[str]:
     if len(volume) >= 20:
         avg_vol = volume.rolling(20).mean().iloc[-1]
         today_vol = volume.iloc[-1]
-        if today_vol > avg_vol * 1.8:
+        if today_vol > avg_vol * 1.5:  # Loosened from 1.8 for more signals
             signals.append(f"Volume Spike ({today_vol / avg_vol:.1f}x avg)")
 
     if signals:
