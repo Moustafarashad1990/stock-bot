@@ -5,4 +5,4 @@ torch
 textblob
 pandas
 numpy
-websockets==12.0
+websockets>=12.0
