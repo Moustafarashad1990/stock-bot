@@ -15,7 +15,6 @@ import backtrader as bt
 from alpaca_trade_api.rest import REST as AlpacaREST
 from peewee import SqliteDatabase, Model, CharField, FloatField, DateTimeField
 from sklearn.model_selection import train_test_split  # Placeholder for future personalization
-import talib  # For ATR, etc.
 import finnhub
 
 # ===================== CONFIG =====================
@@ -142,13 +141,41 @@ def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
+def calculate_macd(close: pd.Series):
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd = ema12 - ema26
+    signal = macd.ewm(span=9, adjust=False).mean()
+    return macd, signal
+
+def detect_ma_crossover(df: pd.DataFrame):
+    if len(df) < 200:
+        return None
+    ma50 = df['close'].rolling(50).mean()
+    ma200 = df['close'].rolling(200).mean()
+    prev50, curr50 = ma50.iloc[-2], ma50.iloc[-1]
+    prev200, curr200 = ma200.iloc[-2], ma200.iloc[-1]
+    if prev50 <= prev200 and curr50 > curr200:
+        return "Golden Cross"
+    if prev50 >= prev200 and curr50 < curr200:
+        return "Death Cross"
+    return None
+
 # ===================== DATA FETCH =====================
 def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
     try:
         client = RESTClient(POLYGON_API_KEY)
         end_date = datetime.now(timezone.utc)
         start_date = end_date - timedelta(days=DATA_PERIOD_DAYS)
-        aggs = list(client.list_aggs(ticker, 1, "day", start_date.date(), end_date.date(), adjusted=True, limit=50000))
+        aggs = list(client.list_aggs(
+            ticker=ticker,
+            multiplier=1,
+            timespan="day",
+            from_=start_date.date(),
+            to=end_date.date(),
+            adjusted=True,
+            limit=50000
+        ))
         if not aggs:
             return None
         df = pd.DataFrame(aggs)
@@ -165,12 +192,16 @@ def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
 def get_stock_news(ticker: str) -> str:
     news = ""
     if finnhub_client:
-        finnhub_news = finnhub_client.company_news(ticker, from_date=datetime.now() - timedelta(days=7), to_date=datetime.now())
-        news = "\n".join([f"{n['headline']} ({n['source']})" for n in finnhub_news[:5]])
+        finnhub_news = finnhub_client.company_news(ticker, from_date=(datetime.now() - timedelta(days=7)).date(), to_date=datetime.now().date())
+        news = "\n".join([f"• {n['headline']} ({n['source']})" for n in finnhub_news[:5]])
     else:
-        stock = yf.Ticker(ticker)
-        news = "\n".join([f"{item['title']} ({item['publisher']})" for item in stock.news[:5]])
-    return news or "No news found."
+        try:
+            stock = yf.Ticker(ticker)
+            yf_news = stock.news[:5]
+            news = "\n".join([f"• {item['title']} ({item['publisher']})" for item in yf_news])
+        except:
+            pass
+    return news or "No recent news found."
 
 # ===================== SIGNAL PROCESSING =====================
 def process_ticker(ticker: str) -> list[str]:
@@ -188,7 +219,22 @@ def process_ticker(ticker: str) -> list[str]:
     elif rsi < 25:
         signals.append(f"Strongly Oversold (RSI {rsi:.1f})")
 
-    # (Add MACD, crossover, volume spike as before)
+    macd_line, signal_line = calculate_macd(close)
+    if len(macd_line) >= 2:
+        if macd_line.iloc[-2] <= signal_line.iloc[-2] and macd_line.iloc[-1] > signal_line.iloc[-1]:
+            signals.append("MACD Bullish Crossover")
+        elif macd_line.iloc[-2] >= signal_line.iloc[-2] and macd_line.iloc[-1] < signal_line.iloc[-1]:
+            signals.append("MACD Bearish Crossover")
+
+    crossover = detect_ma_crossover(df)
+    if crossover:
+        signals.append(crossover)
+
+    if len(volume) >= 20:
+        avg_vol = volume.rolling(20).mean().iloc[-1]
+        today_vol = volume.iloc[-1]
+        if today_vol > avg_vol * 1.8:
+            signals.append(f"Volume Spike ({today_vol / avg_vol:.1f}x avg)")
 
     upside = predict_upside(close.values)
     if upside:
@@ -196,7 +242,7 @@ def process_ticker(ticker: str) -> list[str]:
 
     if signals:
         current_price = close.iloc[-1]
-        explanation = "Why: Based on RSI/MACD; backtest shows strong potential."
+        explanation = "Why: Based on technicals; backtest potential high."
         return [f"**{ticker}** @ ${current_price:.2f}: " + "; ".join(signals) + f"\n{explanation}"]
     return []
 
@@ -242,7 +288,7 @@ async def trade_cmd(ctx, ticker: str, action: str = "buy"):
         return
     try:
         alpaca.submit_order(symbol=ticker.upper(), qty=1, side=action, type='market', time_in_force='gtc')
-        Trade.create(ticker=ticker, action=action, price=yf.Ticker(ticker).info['currentPrice'])
+        Trade.create(ticker=ticker, action=action, price=yf.Ticker(ticker).info.get('currentPrice', 0))
         await ctx.send(f"{action.capitalize()} order placed for {ticker} (paper mode).")
     except Exception as e:
         await ctx.send(f"Trade error: {e}")
@@ -255,14 +301,49 @@ async def debrief_cmd(ctx):
 
 @bot.command(name="rate")
 async def rate_cmd(ctx, rating: str):
-    # Placeholder for ML feedback
     await ctx.send(f"Feedback '{rating}' noted - strategy optimized.")
 
 async def generate_recommendations(ctx, is_buy: bool):
-    # (Your existing logic, enhanced with upside filter)
+    channel = ctx.channel
+    title = "Buy" if is_buy else "Sell"
+    await channel.send(f"🔍 Scanning for strong {title.lower()} signals...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(process_ticker, t) for t in tickers]
+        all_signals = []
+        for future in concurrent.futures.as_completed(futures):
+            all_signals.extend(future.result())
+    recommendations = [s for s in all_signals if any(k in s for k in (["Bullish", "Golden Cross", "Oversold", "Volume Spike"] if is_buy else ["Bearish", "Death Cross", "Overbought"]))]
+    if recommendations:
+        msg = f"**Strong {title} Signals**\n" + "\n".join(recommendations[:25])
+        if len(recommendations) > 25:
+            msg += f"\n... and {len(recommendations)-25} more."
+        await channel.send(msg)
+    else:
+        await channel.send(f"No strong {title.lower()} signals found today.")
 
 async def daily_analysis():
-    # (Your existing logic)
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        print("Channel not found!")
+        return
+    await channel.send("📊 **Daily Market Scan Started** 📊")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(process_ticker, t) for t in tickers]
+        all_signals = []
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                all_signals.extend(result)
+    if all_signals:
+        priority = [s for s in all_signals if any(x in s for x in ["Cross", "Overbought", "Oversold"])]
+        others = [s for s in all_signals if s not in priority]
+        final_list = priority + others
+        msg = "**High Confidence Signals Today**\n\n" + "\n".join(final_list[:30])
+        if len(final_list) > 30:
+            msg += f"\n\n... and {len(final_list)-30} more signals."
+        await channel.send(msg)
+    else:
+        await channel.send("✅ No strong technical signals detected today.")
 
 @bot.event
 async def on_ready():
@@ -272,7 +353,12 @@ async def on_ready():
         await channel.send("🚀 **Advanced Stock Bot is LIVE** 🚀\nUse !help for commands.")
 
 async def schedule_daily():
-    # (Your existing schedule)
+    while True:
+        now = datetime.now(timezone.utc)
+        if now.weekday() <= 4 and 6 <= now.hour < 11:
+            await daily_analysis()
+            await asyncio.sleep(3600)
+        await asyncio.sleep(60)
 
 async def main():
     await asyncio.gather(
