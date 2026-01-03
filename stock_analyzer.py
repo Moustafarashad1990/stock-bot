@@ -134,9 +134,13 @@ def backtest_strategy(ticker, start_date, end_date):
 
 # ===================== INDICATORS =====================
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    return talib.RSI(series, timeperiod=period)
-
-# (Add your other indicators here, using talib for efficiency, e.g., talib.MACD, talib.SMA)
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+    avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 # ===================== DATA FETCH =====================
 def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
