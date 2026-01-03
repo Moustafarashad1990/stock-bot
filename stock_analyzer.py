@@ -12,10 +12,14 @@ from textblob import TextBlob
 import torch
 import torch.nn as nn
 import backtrader as bt
-from alpaca.trade_api import REST as AlpacaREST  # Fixed import
+from alpaca.trading.client import TradingClient  # Fixed import
 from peewee import SqliteDatabase, Model, CharField, FloatField, DateTimeField
 from sklearn.model_selection import train_test_split  # Placeholder for future personalization
 import finnhub
+
+# Ignore SyntaxWarnings from backtrader
+import warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 # ===================== CONFIG =====================
 tickers = [
@@ -51,7 +55,7 @@ tickers = [
     "SWKS", "SYF", "SYK", "SYY", "T", "TAP", "TDG", "TDY", "TECH", "TEL", "TER", "TFC", "TFX", "TGT",
     "TJX", "TKO", "TMUS", "TPR", "TRGP", "TRMB", "TROW", "TRV", "TSCO", "TSLA", "TSN", "TT", "TTWO",
     "TXN", "TXT", "TYL", "UAL", "UBER", "UDR", "UHS", "ULTA", "UNH", "UNP", "UPS", "URI", "USB", "V",
-    "VICI", "VLO", "VLTO", "VMC", "VRSk", "VRSN", "VRTX", "VTR", "VTRS", "VZ", "WAB", "WAT", "WBA",
+    "VICI", "VLO", "VLTO", "VMC", "VRSK", "VRSN", "VRTX", "VTR", "VTRS", "VZ", "WAB", "WAT", "WBA",
     "WBD", "WDC", "WEC", "WELL", "WFC", "WM", "WMB", "WMT", "WRB", "WST", "WTW", "WY", "WYNN", "XEL",
     "XOM", "XYL", "YUM", "ZBH", "ZBRA", "ZTS", "ARES", "CRH", "CVNA", "FIX"
 ]
@@ -84,7 +88,7 @@ class Trade(Model):
 db.connect()
 db.create_tables([Trade])
 
-alpaca = AlpacaREST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url='https://paper-api.alpaca.markets') if ALPACA_API_KEY and ALPACA_SECRET_KEY else None
+alpaca = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True) if ALPACA_API_KEY and ALPACA_SECRET_KEY else None
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY) if FINNHUB_API_KEY else None
 
 # ===================== ML MODEL =====================
