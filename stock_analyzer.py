@@ -12,7 +12,7 @@ from textblob import TextBlob
 import torch
 import torch.nn as nn
 import backtrader as bt
-from alpaca_trade_api.rest import REST as AlpacaREST
+from alpaca.trade_api import REST as AlpacaREST  # Fixed import
 from peewee import SqliteDatabase, Model, CharField, FloatField, DateTimeField
 from sklearn.model_selection import train_test_split  # Placeholder for future personalization
 import finnhub
@@ -51,7 +51,7 @@ tickers = [
     "SWKS", "SYF", "SYK", "SYY", "T", "TAP", "TDG", "TDY", "TECH", "TEL", "TER", "TFC", "TFX", "TGT",
     "TJX", "TKO", "TMUS", "TPR", "TRGP", "TRMB", "TROW", "TRV", "TSCO", "TSLA", "TSN", "TT", "TTWO",
     "TXN", "TXT", "TYL", "UAL", "UBER", "UDR", "UHS", "ULTA", "UNH", "UNP", "UPS", "URI", "USB", "V",
-    "VICI", "VLO", "VLTO", "VMC", "VRSK", "VRSN", "VRTX", "VTR", "VTRS", "VZ", "WAB", "WAT", "WBA",
+    "VICI", "VLO", "VLTO", "VMC", "VRSk", "VRSN", "VRTX", "VTR", "VTRS", "VZ", "WAB", "WAT", "WBA",
     "WBD", "WDC", "WEC", "WELL", "WFC", "WM", "WMB", "WMT", "WRB", "WST", "WTW", "WY", "WYNN", "XEL",
     "XOM", "XYL", "YUM", "ZBH", "ZBRA", "ZTS", "ARES", "CRH", "CVNA", "FIX"
 ]
