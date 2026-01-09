@@ -12,11 +12,9 @@ from textblob import TextBlob
 import torch
 import torch.nn as nn
 import backtrader as bt
-from alpaca.trading.client import TradingClient  # Correct import for alpaca-py
+from alpaca.trading.client import TradingClient
 from peewee import SqliteDatabase, Model, CharField, FloatField, DateTimeField
 import finnhub
-
-# Ignore SyntaxWarnings from backtrader (harmless)
 import warnings
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
@@ -73,7 +71,6 @@ if not POLYGON_API_KEY:
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN required!")
 
-# Database for trade history
 db = SqliteDatabase('trades.db')
 
 class Trade(Model):
@@ -88,13 +85,9 @@ class Trade(Model):
 db.connect()
 db.create_tables([Trade])
 
-# Alpaca paper trading client
 alpaca = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True) if ALPACA_API_KEY and ALPACA_SECRET_KEY else None
-
-# Finnhub for better news
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY) if FINNHUB_API_KEY else None
 
-# ===================== AI PREDICTION =====================
 class PriceLSTM(nn.Module):
     def __init__(self):
         super().__init__()
@@ -117,7 +110,6 @@ def predict_upside(close_prices):
     except Exception:
         return None
 
-# ===================== BACKTESTING =====================
 class MAStrategy(bt.Strategy):
     def __init__(self):
         self.sma = bt.indicators.SimpleMovingAverage(period=50)
@@ -141,7 +133,6 @@ def backtest_strategy(ticker, start_date, end_date):
     cerebro.run()
     return cerebro.broker.getvalue() - 10000
 
-# ===================== INDICATORS =====================
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.where(delta > 0, 0)
@@ -171,7 +162,6 @@ def detect_ma_crossover(df: pd.DataFrame):
         return "Death Cross"
     return None
 
-# ===================== DATA FETCH =====================
 def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
     try:
         client = RESTClient(POLYGON_API_KEY)
@@ -198,7 +188,6 @@ def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
         print(f"Error fetching {ticker}: {e}")
         return None
 
-# ===================== NEWS =====================
 def get_stock_news(ticker: str) -> str:
     news = ""
     if finnhub_client:
@@ -216,7 +205,6 @@ def get_stock_news(ticker: str) -> str:
             pass
     return news or "No recent news found."
 
-# ===================== SIGNAL PROCESSING =====================
 def process_ticker(ticker: str) -> list[str]:
     df = fetch_polygon_data(ticker)
     if df is None or len(df) < 200:
@@ -259,7 +247,6 @@ def process_ticker(ticker: str) -> list[str]:
         return [f"**{ticker}** @ ${current_price:.2f}: " + "; ".join(signals) + f"\n{explanation}"]
     return []
 
-# ===================== DISCORD BOT =====================
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
@@ -327,11 +314,18 @@ async def generate_recommendations(ctx, is_buy: bool):
     channel = ctx.channel
     title = "Buy" if is_buy else "Sell"
     await channel.send(f"🔍 Scanning for strong {title.lower()} signals...")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_ticker, t) for t in tickers]
-        all_signals = []
-        for future in concurrent.futures.as_completed(futures):
-            all_signals.extend(future.result())
+    all_signals = []
+    try:
+        async with asyncio.timeout(600):  # 10 minutes timeout
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                loop = asyncio.get_event_loop()
+                futures = [loop.run_in_executor(executor, process_ticker, t) for t in tickers]
+                for future in asyncio.as_completed(futures):
+                    result = await future
+                    if result:
+                        all_signals.extend(result)
+    except asyncio.TimeoutError:
+        await channel.send("⚠️ Scan timed out after 10 minutes - showing partial results")
     keywords = ["Bullish", "Golden Cross", "Oversold", "Volume Spike"] if is_buy else ["Bearish", "Death Cross", "Overbought"]
     recommendations = [s for s in all_signals if any(k in s for k in keywords)]
     if recommendations:
@@ -348,13 +342,18 @@ async def daily_analysis():
         print("Channel not found!")
         return
     await channel.send("📊 **Daily Market Scan Started** 📊")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_ticker, t) for t in tickers]
-        all_signals = []
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
-                all_signals.extend(result)
+    all_signals = []
+    try:
+        async with asyncio.timeout(600):  # 10 minutes timeout
+            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                loop = asyncio.get_event_loop()
+                futures = [loop.run_in_executor(executor, process_ticker, t) for t in tickers]
+                for future in asyncio.as_completed(futures):
+                    result = await future
+                    if result:
+                        all_signals.extend(result)
+    except asyncio.TimeoutError:
+        await channel.send("⚠️ Scan timed out after 10 minutes - showing partial results")
     if all_signals:
         priority = [s for s in all_signals if any(x in s for x in ["Cross", "Overbought", "Oversold"])]
         others = [s for s in all_signals if s not in priority]
@@ -376,9 +375,9 @@ async def on_ready():
 async def schedule_daily():
     while True:
         now = datetime.now(timezone.utc)
-        if now.weekday() <= 4 and 6 <= now.hour < 11:  # Dubai market hours
+        if now.weekday() <= 4 and 6 <= now.hour < 11:
             await daily_analysis()
-            await asyncio.sleep(3600)  # Wait 1 hour
+            await asyncio.sleep(3600)
         await asyncio.sleep(60)
 
 async def main():
