@@ -12,12 +12,11 @@ from textblob import TextBlob
 import torch
 import torch.nn as nn
 import backtrader as bt
-from alpaca.trading.client import TradingClient  # Fixed import
+from alpaca.trading.client import TradingClient  # Correct import for alpaca-py
 from peewee import SqliteDatabase, Model, CharField, FloatField, DateTimeField
-from sklearn.model_selection import train_test_split  # Placeholder for future personalization
 import finnhub
 
-# Ignore SyntaxWarnings from backtrader
+# Ignore SyntaxWarnings from backtrader (harmless)
 import warnings
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 
@@ -67,13 +66,14 @@ ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "1452952904980758571"))
 DATA_PERIOD_DAYS = 400
-MAX_WORKERS = 20  # Reduced slightly for safety
+MAX_WORKERS = 20
 
 if not POLYGON_API_KEY:
     raise ValueError("POLYGON_API_KEY required!")
 if not DISCORD_TOKEN:
     raise ValueError("DISCORD_TOKEN required!")
 
+# Database for trade history
 db = SqliteDatabase('trades.db')
 
 class Trade(Model):
@@ -88,10 +88,13 @@ class Trade(Model):
 db.connect()
 db.create_tables([Trade])
 
+# Alpaca paper trading client
 alpaca = TradingClient(ALPACA_API_KEY, ALPACA_SECRET_KEY, paper=True) if ALPACA_API_KEY and ALPACA_SECRET_KEY else None
+
+# Finnhub for better news
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY) if FINNHUB_API_KEY else None
 
-# ===================== ML MODEL =====================
+# ===================== AI PREDICTION =====================
 class PriceLSTM(nn.Module):
     def __init__(self):
         super().__init__()
@@ -106,12 +109,12 @@ def predict_upside(close_prices):
     try:
         model = PriceLSTM()
         model.eval()
-        scaled = np.array(close_prices[-60:]).reshape(1, -1, 1)  # Use last 60 days
+        scaled = np.array(close_prices[-60:]).reshape(1, -1, 1).astype(np.float32)
         with torch.no_grad():
-            pred = model(torch.tensor(scaled, dtype=torch.float32)).item()
+            pred = model(torch.tensor(scaled)).item()
         upside = (pred - close_prices[-1]) / close_prices[-1] * 100
         return upside if upside > 30 else None
-    except:
+    except Exception:
         return None
 
 # ===================== BACKTESTING =====================
@@ -129,11 +132,14 @@ class MAStrategy(bt.Strategy):
 
 def backtest_strategy(ticker, start_date, end_date):
     data = yf.download(ticker, start=start_date, end=end_date)
+    if data.empty:
+        return 0
     cerebro = bt.Cerebro()
     cerebro.addstrategy(MAStrategy)
     cerebro.adddata(bt.feeds.PandasData(dataname=data))
+    cerebro.broker.setcash(10000)
     cerebro.run()
-    return cerebro.broker.getvalue() - 10000  # Return on $10k
+    return cerebro.broker.getvalue() - 10000
 
 # ===================== INDICATORS =====================
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -196,9 +202,12 @@ def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
 def get_stock_news(ticker: str) -> str:
     news = ""
     if finnhub_client:
-        finnhub_news = finnhub_client.company_news(ticker, from_date=(datetime.now() - timedelta(days=7)).date(), to_date=datetime.now().date())
-        news = "\n".join([f"• {n['headline']} ({n['source']})" for n in finnhub_news[:5]])
-    else:
+        try:
+            finnhub_news = finnhub_client.company_news(ticker, _from=(datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'), to=datetime.now().strftime('%Y-%m-%d'))
+            news = "\n".join([f"• {n['headline']} ({n['source']})" for n in finnhub_news[:5]])
+        except:
+            pass
+    if not news:
         try:
             stock = yf.Ticker(ticker)
             yf_news = stock.news[:5]
@@ -291,8 +300,15 @@ async def trade_cmd(ctx, ticker: str, action: str = "buy"):
         await ctx.send("Alpaca not configured.")
         return
     try:
-        alpaca.submit_order(symbol=ticker.upper(), qty=1, side=action, type='market', time_in_force='gtc')
-        Trade.create(ticker=ticker, action=action, price=yf.Ticker(ticker).info.get('currentPrice', 0))
+        alpaca.submit_order(
+            symbol=ticker.upper(),
+            qty=1,
+            side=action,
+            type='market',
+            time_in_force='gtc'
+        )
+        current_price = yf.Ticker(ticker.upper()).info.get('currentPrice', 0)
+        Trade.create(ticker=ticker.upper(), action=action, price=current_price)
         await ctx.send(f"{action.capitalize()} order placed for {ticker} (paper mode).")
     except Exception as e:
         await ctx.send(f"Trade error: {e}")
@@ -300,7 +316,7 @@ async def trade_cmd(ctx, ticker: str, action: str = "buy"):
 @bot.command(name="debrief")
 async def debrief_cmd(ctx):
     trades = Trade.select().order_by(Trade.timestamp.desc()).limit(5)
-    msg = "Recent Trades:\n" + "\n".join([f"{t.ticker}: {t.action} @ {t.price} on {t.timestamp}" for t in trades])
+    msg = "Recent Trades:\n" + "\n".join([f"{t.ticker}: {t.action} @ ${t.price:.2f} on {t.timestamp.date()}" for t in trades])
     await ctx.send(msg or "No trades yet.")
 
 @bot.command(name="rate")
@@ -316,7 +332,8 @@ async def generate_recommendations(ctx, is_buy: bool):
         all_signals = []
         for future in concurrent.futures.as_completed(futures):
             all_signals.extend(future.result())
-    recommendations = [s for s in all_signals if any(k in s for k in (["Bullish", "Golden Cross", "Oversold", "Volume Spike"] if is_buy else ["Bearish", "Death Cross", "Overbought"]))]
+    keywords = ["Bullish", "Golden Cross", "Oversold", "Volume Spike"] if is_buy else ["Bearish", "Death Cross", "Overbought"]
+    recommendations = [s for s in all_signals if any(k in s for k in keywords)]
     if recommendations:
         msg = f"**Strong {title} Signals**\n" + "\n".join(recommendations[:25])
         if len(recommendations) > 25:
@@ -359,9 +376,9 @@ async def on_ready():
 async def schedule_daily():
     while True:
         now = datetime.now(timezone.utc)
-        if now.weekday() <= 4 and 6 <= now.hour < 11:
+        if now.weekday() <= 4 and 6 <= now.hour < 11:  # Dubai market hours
             await daily_analysis()
-            await asyncio.sleep(3600)
+            await asyncio.sleep(3600)  # Wait 1 hour
         await asyncio.sleep(60)
 
 async def main():
