@@ -11,21 +11,21 @@ import yfinance as yf
 from textblob import TextBlob
 from sklearn.linear_model import LinearRegression  # Simple trend forecast
 from peewee import SqliteDatabase, Model, CharField, FloatField, DateTimeField
+import finnhub
 
 # ===================== CONFIG =====================
 tickers = [
     "AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "GOOGL", "META", "BRK-B", "LLY", "JPM",
     "AVGO", "V", "WMT", "XOM", "MA", "PG", "JNJ", "HD", "MRK", "ABBV",
-    # Add more later - start with 20-100 to avoid overload
-    # "A", "ABBV", "ABNB", ... (keep full list commented out)
+    # Add more gradually - start small to avoid slow scans
 ]
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "1452952904980758571"))
 DATA_PERIOD_DAYS = 400
-MAX_WORKERS = 10  # Safe for $29 plan
-SCAN_TIMEOUT = 300  # 5 minutes total scan timeout
+MAX_WORKERS = 10  # Safe number
+SCAN_TIMEOUT = 300  # 5 minutes total
 
 if not POLYGON_API_KEY:
     raise ValueError("POLYGON_API_KEY required!")
@@ -46,7 +46,7 @@ class Trade(Model):
 db.connect()
 db.create_tables([Trade])
 
-# ===================== SIMPLE TREND FORECAST (no fake AI) =====================
+# ===================== SIMPLE TREND FORECAST =====================
 def predict_trend_upside(close_prices):
     if len(close_prices) < 30:
         return None
@@ -56,7 +56,7 @@ def predict_trend_upside(close_prices):
     future_x = np.array([[len(close_prices) + 30]])  # 30 days ahead
     pred = model.predict(future_x)[0]
     upside = (pred - close_prices[-1]) / close_prices[-1] * 100
-    return upside if upside > 20 else None  # Only show if meaningful
+    return upside if upside > 20 else None
 
 # ===================== INDICATORS =====================
 def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
@@ -88,7 +88,7 @@ def detect_ma_crossover(df: pd.DataFrame):
         return "Death Cross"
     return None
 
-# ===================== DATA FETCH (Polygon + fallback) =====================
+# ===================== DATA FETCH =====================
 def fetch_polygon_data(ticker: str) -> pd.DataFrame | None:
     try:
         client = RESTClient(POLYGON_API_KEY)
@@ -127,8 +127,8 @@ def fetch_data(ticker: str) -> pd.DataFrame | None:
         df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
         df.columns = ['open', 'high', 'low', 'close', 'volume']
         return df
-    except:
-        print(f"yfinance fallback failed for {ticker}")
+    except Exception as e:
+        print(f"yfinance fallback failed for {ticker}: {e}")
         return None
 
 # ===================== SIGNAL PROCESSING =====================
@@ -193,6 +193,16 @@ async def sell_recommendations(ctx):
     await ctx.send("🔍 Scanning strong sell signals...")
     await generate_recommendations(ctx, is_buy=False)
 
+@bot.command(name="news")
+async def stock_news(ctx, ticker: str = None):
+    if not ticker:
+        await ctx.send("Usage: `!news NVDA`")
+        return
+    ticker = ticker.upper()
+    await ctx.send(f"📰 Fetching latest news for **{ticker}**...")
+    news = get_stock_news(ticker)
+    await ctx.send(news)
+
 async def generate_recommendations(ctx, is_buy: bool):
     channel = ctx.channel
     title = "Buy" if is_buy else "Sell"
@@ -200,7 +210,7 @@ async def generate_recommendations(ctx, is_buy: bool):
     all_signals = []
     try:
         async with asyncio.timeout(300):  # 5 min timeout
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 loop = asyncio.get_event_loop()
                 futures = [loop.run_in_executor(executor, process_ticker, t) for t in tickers]
                 for future in asyncio.as_completed(futures):
@@ -208,7 +218,7 @@ async def generate_recommendations(ctx, is_buy: bool):
                     if result:
                         all_signals.extend(result)
     except asyncio.TimeoutError:
-        await channel.send("⚠️ Scan timed out - partial results shown")
+        await channel.send("⚠️ Scan timed out after 5 minutes - partial results shown")
     recommendations = [s for s in all_signals if any(k in s for k in keywords)]
     if recommendations:
         msg = f"**Strong {title} Signals**\n" + "\n".join(recommendations[:15])
@@ -216,18 +226,18 @@ async def generate_recommendations(ctx, is_buy: bool):
             msg += f"\n... and {len(recommendations)-15} more"
         await channel.send(msg)
     else:
-        await channel.send(f"No strong {title.lower()} signals found.")
+        await channel.send(f"No strong {title.lower()} signals found today.")
 
 async def daily_analysis():
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
         print("Channel not found!")
         return
-    await channel.send("📊 Daily scan starting...")
+    await channel.send("📊 Daily scan starting... (may take 1-5 minutes)")
     all_signals = []
     try:
         async with asyncio.timeout(300):
-            with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                 loop = asyncio.get_event_loop()
                 futures = [loop.run_in_executor(executor, process_ticker, t) for t in tickers]
                 for future in asyncio.as_completed(futures):
@@ -235,7 +245,7 @@ async def daily_analysis():
                     if result:
                         all_signals.extend(result)
     except asyncio.TimeoutError:
-        await channel.send("⚠️ Daily scan timed out - partial results")
+        await channel.send("⚠️ Daily scan timed out - partial results shown")
     if all_signals:
         priority = [s for s in all_signals if any(x in s for x in ["Cross", "Overbought", "Oversold"])]
         others = [s for s in all_signals if s not in priority]
